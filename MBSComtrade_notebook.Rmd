@@ -1,0 +1,209 @@
+---
+title: "MBS Comtrade Data Notebook"
+output: html_notebook
+---
+
+
+Load the libraries.
+
+```{r}
+library(data.table)
+library(ggplot2)
+```
+
+The code below will show the data cleaning and exploration.
+
+First load the data.
+
+# Data Wrangling
+
+```{r}
+setwd("C:/Users/Ferhat/Documents/GitHub/WorldBankData")
+
+data = read.csv("MBSComtrade.csv")
+
+data$series_type = NULL
+data$table_type = NULL
+data$table_type_desc = NULL
+data$period_type = NULL
+data$trade_flow = NULL
+data$currency_type = NULL
+data$value_unit = NULL
+data$value_type = NULL
+data$value_type_desc = NULL
+data$base_year = NULL
+data$period_number = NULL
+data$country_type = NULL
+data$estimation_type = NULL
+data$estimation_type_desc = NULL
+
+
+save(data, file = "cleaned_data.rdata")
+```
+
+```{r}
+data = as.data.table(data)
+```
+
+Lets explore some of the data.
+
+```{r}
+head(data[country_english_name == "USA"],10)
+```
+Lets do some plots. But first lets get rid of world regions and only keep countryes so we don't double count. Lets look at the USA first.
+```{r}
+USA = data[country_english_name == "USA" & partner_country_code > 0 & partner_country_code < 899 ]
+head(USA,10)
+```
+
+Now lets group  everything by partner export country.
+```{r}
+USA_group = USA[, .(value.SUM = sum(value)), by=c("partner_country_english_name", "year")]
+setnames(USA_group, c("Country","Year", "TotalValue") )
+head(USA_group,10)
+```
+
+Now lets plot.
+
+# Line chart
+
+```{r}
+
+library(plotly)
+p = ggplot(USA_group, aes(x = Year, y=TotalValue))+
+  geom_line(aes(colour = Country))+
+  geom_point(aes(colour = Country), size=2)+
+  theme(legend.position="none")
+
+ggplotly(p)
+```
+# Pie chart
+
+```{r}
+ggplot(USA_group, aes(x=factor(1), fill = factor(Country)))+
+  geom_bar(aes(weight = TotalValue), width = 1)+
+  coord_polar(theta = "y", start=0)+
+  theme(legend.position="none")
+```
+
+# Sankey Diagram
+
+```{r  results='asis'}
+USA_group_country = USA_group[, .(Sum = sum(TotalValue)), by=Country]
+USA_group_country$Source = "USA"
+USA_group_country[, Country:=as.character(Country)]
+
+USA_group_country <- USA_group_country %>% 
+  select(Country, Source, Sum)
+setorder(USA_group_country, Sum)
+
+slice = tail(USA_group_country, 10)
+
+slice <- slice %>% 
+  select(Source, Country, Sum)
+
+library(googleVis)
+sk1 <- gvisSankey(slice, from="Source", to="Country", weight="Sum")
+print(sk1, 'chart')
+```
+Lets play with leaflet package.
+
+# Leaflet
+
+```{r}
+library(leaflet)
+m <- leaflet() %>% setView(lng = -71.0589, lat = 42.3601, zoom = 12)
+m %>% addTiles()
+```
+Lets get the latitude and longitude of countries.
+
+```{r}
+countries = read.csv("countries.csv")
+countries = as.data.table(countries)
+setnames(countries, old = c("country", "name"), new = c("CountryCode", "Country"))
+
+head(countries,10)
+```
+Now lets populate USA_group data table the latitude and longitude of the countries.
+
+```{r}
+USA_group_joined = merge(USA_group, countries, by = "Country")
+
+na.omit(USA_group_joined)
+
+head(USA_group_joined, 10)
+```
+
+```{r}
+setorder(USA_group_joined, Country, Year)
+leaflet(USA_group_joined[USA_group_joined[,Year == 2010]]) %>% addTiles() %>%
+  addCircles(lng = ~longitude, lat = ~latitude, weight = 1,
+    radius = ~sqrt(TotalValue), popup = ~paste(Country,"Volume: ",TotalValue), fillOpacity = 0.5
+  )
+```
+
+Now lets look at the flows using Leaflet's addflows function.
+
+```{r}
+
+leaflet(USA_group_joined[USA_group_joined[,Year == 2010]]) %>% addTiles() %>%
+  addCircles(lng = ~longitude, lat = ~latitude, weight = 1,
+    radius = ~sqrt(TotalValue), popup = ~paste(Country,"Volume: ",TotalValue), fillOpacity = 0.5
+  ) %>%
+  leaflet.minicharts::addFlows(countries$longitude[countries$Country == "United States"], countries$latitude[countries$Country == "United States"],
+           countries$longitude[countries$Country == "Brazil"], countries$latitude[countries$Country == "Brazil"], color = 'green',
+           flow = USA_group_joined[USA_group_joined[,Year == 2010 & Country == "Brazil"]]$TotalValue, opacity = 0.5) %>%
+  leaflet.minicharts::addFlows(countries$longitude[countries$Country == "United States"], countries$latitude[countries$Country == "United States"],
+           countries$longitude[countries$Country == "China"], countries$latitude[countries$Country == "China"], color = 'red',
+           flow = USA_group_joined[USA_group_joined[,Year == 2010 & Country == "China"]]$TotalValue, opacity = 0.5) %>%
+  leaflet.minicharts::addFlows(countries$longitude[countries$Country == "United States"], countries$latitude[countries$Country == "United States"],
+           countries$longitude[countries$Country == "Australia"], countries$latitude[countries$Country == "Australia"], color = 'orange',
+           flow = USA_group_joined[USA_group_joined[,Year == 2010 & Country == "Australia"]]$TotalValue, opacity = 0.5)
+
+
+```
+
+Lets do it with time
+
+```{r}
+leaflet(USA_group_joined) %>% addTiles() %>%
+  leaflet.minicharts::addFlows(countries$longitude[countries$Country == "United States"], countries$latitude[countries$Country == "United States"],
+           countries$longitude[countries$Country == "Brazil"], countries$latitude[countries$Country == "Brazil"], color = 'green',
+           flow = USA_group_joined[USA_group_joined[, Country == "Brazil"]]$TotalValue, opacity = 0.5, time = unique(USA_group_joined$Year)) %>%
+  leaflet.minicharts::addFlows(countries$longitude[countries$Country == "United States"], countries$latitude[countries$Country == "United States"],
+           countries$longitude[countries$Country == "China"], countries$latitude[countries$Country == "China"], color = 'red',
+           flow = USA_group_joined[USA_group_joined[, Country == "China"]]$TotalValue, opacity = 0.5, time =unique(USA_group_joined$Year)) %>%
+  leaflet.minicharts::addFlows(countries$longitude[countries$Country == "United States"], countries$latitude[countries$Country == "United States"],
+           countries$longitude[countries$Country == "Australia"], countries$latitude[countries$Country == "Australia"], color = 'orange',
+           flow = USA_group_joined[USA_group_joined[, Country == "Australia"]]$TotalValue, opacity = 0.5, time =unique(USA_group_joined$Year)) %>%
+    leaflet.minicharts::addFlows(countries$longitude[countries$Country == "United States"], countries$latitude[countries$Country == "United States"],
+           countries$longitude[countries$Country == "Albania"], countries$latitude[countries$Country == "Albania"], color = 'black',
+           flow = USA_group_joined[USA_group_joined[, Country == "Albania"]]$TotalValue, opacity = 0.5, time =unique(USA_group_joined$Year))
+```
+
+
+```{r}
+
+basemap = leaflet(USA_group_joined) %>% addTiles()
+
+basemap %>% leaflet.minicharts::addFlows(countries$longitude[countries$Country == "United States"], countries$latitude[countries$Country == "United States"],USA_group_joined$longitude, USA_group_joined$latitude,
+    flow = USA_group_joined$TotalValue,
+    time = USA_group_joined$Year)
+```
+
+USA Group Joined cut to show select countries.
+
+```{r}
+USA_group_joined_cut = USA_group_joined[Country %in% c("Canada", "China", "Brazil", "India", "Australia", "South Africa", "Mexico")]
+```
+
+Repeat the plot
+
+```{r}
+basemap = leaflet(USA_group_joined_cut) %>% addTiles()
+
+basemap %>% leaflet.minicharts::addFlows(countries$longitude[countries$Country == "United States"], countries$latitude[countries$Country == "United States"],USA_group_joined_cut$longitude, USA_group_joined_cut$latitude,
+    flow = USA_group_joined_cut$TotalValue,
+    time = USA_group_joined_cut$Year)
+```
+
